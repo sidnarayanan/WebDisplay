@@ -33,11 +33,11 @@ class DirectoryListing {
 	public $pageTitle = null;
 
 	// The URL of this script. Optionally set if your server is unable to detect the paths of files
-	public $includeUrl = 'http://XXXX/view.php';
+	public $includeUrl = 'http://t3serv001.mit.edu/~snarayan/view.php';
 
 	// If you've enabled the includeUrl parameter above, enter the full url to the directory the view.php file
 	// is located in here, followed by a forward slash.
-	public $directoryUrl = 'http://XXXX/';
+	public $directoryUrl = 'http://t3serv001.mit.edu/~snarayan/';
 
 	// Set to true to list all sub-directories and allow them to be browsed
 	public $showSubDirectories = true;
@@ -982,7 +982,7 @@ function pr($data, $die = false) {
                 <?php foreach ($data['files'] as $file): ?>
                   <?php if ($file['mime']=='image/png'): ?>
                         <div class="col-md-3 col-sm-6 col-xs-12">
-                          <?php echo str_replace('Over','/',str_replace('AND',' && ',str_replace('_',' ',str_replace('.png','',$file['name'])))); ?>
+                          <?php echo str_replace('Minus','-',str_replace('Plus','+',str_replace('Times','X',str_replace('Over','/',str_replace('AND',' && ',str_replace('_',' ',str_replace('.png','',$file['name']))))))); ?>
                           <a href="<?php echo str_replace('png','C',$file['url']); ?>" target="<?php echo $file['target']; ?>" > 
                             .C 
                           </a>

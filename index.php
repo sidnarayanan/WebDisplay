@@ -33,11 +33,11 @@ class DirectoryListing {
 	public $pageTitle = null;
 
 	// The URL of this script. Optionally set if your server is unable to detect the paths of files
-	public $includeUrl = 'http://XXXX/index.php';
+	public $includeUrl = 'http://t3serv001.mit.edu/~snarayan/index.php';
 
 	// If you've enabled the includeUrl parameter above, enter the full url to the directory the index.php file
 	// is located in here, followed by a forward slash.
-	public $directoryUrl = 'http://XXXX/';
+	public $directoryUrl = 'http://t3serv001.mit.edu/~snarayan/';
 
 	// Set to true to list all sub-directories and allow them to be browsed
 	public $showSubDirectories = true;
@@ -1111,7 +1111,7 @@ function pr($data, $die = false) {
                         <?php if (isset($file['preview']) && $file['preview']): ?>
                           <span class="preview"><img src="?preview=<?php echo $file['relativePath']; ?>"><i class="preview_icon"></i></span>
                         <?php endif; ?>
-                          <?php echo str_replace('Over','/',str_replace('AND',' && ',str_replace('_',' ',str_replace('.png','',$file['name'])))); ?>
+                          <?php echo str_replace('Minus','-',str_replace('Plus','+',str_replace('Times','X',str_replace('Over','/',str_replace('AND',' && ',str_replace('_',' ',str_replace('.png','',$file['name']))))))); ?>
                       </td>
                       <td class="text-right sm-hidden"><?php echo date('M jS Y \a\t g:ia', $file['modified']); ?></td>
                     </tr>
