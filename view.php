@@ -983,6 +983,12 @@ function pr($data, $die = false) {
                   <?php if ($file['mime']=='image/png'): ?>
                         <div class="col-md-3 col-sm-6 col-xs-12">
                           <?php echo str_replace('Minus','-',str_replace('Plus','+',str_replace('Times','X',str_replace('Over','/',str_replace('AND',' && ',str_replace('_',' ',str_replace('.png','',$file['name']))))))); ?>
+                          <a href="<?php echo $file['url']; ?>" target="<?php echo $file['target']; ?>" > 
+                            .png 
+                          </a>
+                          <a href="<?php echo str_replace('png','pdf',$file['url']); ?>" target="<?php echo $file['target']; ?>" > 
+                            .pdf 
+                          </a>
                           <a href="<?php echo str_replace('png','C',$file['url']); ?>" target="<?php echo $file['target']; ?>" > 
                             .C 
                           </a>
