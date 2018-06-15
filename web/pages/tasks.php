@@ -39,7 +39,7 @@ session_start();
         if ($task != "") {
             $task = $_GET["task"];
             $tasks = explode(",", $task);
-            $cmd = "SELECT task, timestamp, starttime FROM jobs WHERE ";
+            $cmd = "SELECT task, timestamp, starttime, job_id FROM jobs WHERE ";
             foreach ($tasks as $t) {
                 $cmd .= "task LIKE ? OR ";
             }
@@ -47,14 +47,14 @@ session_start();
             $stmt = $db->prepare($cmd); 
             $stmt->execute($tasks);
         } else { 
-            $stmt = $db->prepare("SELECT task, timestamp, starttime FROM jobs"); 
+            $stmt = $db->prepare("SELECT task, timestamp, starttime, job_id FROM jobs"); 
             $stmt->execute();
         }
         $data = $stmt->fetchall(); 
         echo " <script type=\"text/javascript\"> var records = [";
         foreach ($data as $rec) {
             if ($rec['starttime'] > 0 && $rec['timestamp'] > 0) {
-                echo sprintf("[\"%s\", %d, %d],", $rec['task'], $rec['starttime'], $rec['timestamp']);
+                echo sprintf("[\"%s\", %d, %d, \"%s\"],", $rec['task'], $rec['starttime'], $rec['timestamp'], $rec['job_id']);
             }
         }
         echo " ]; </script>";
@@ -64,6 +64,9 @@ session_start();
     $db = null;        
     ?>
     <script type="text/javascript">
+    function labform(label, series)  {
+        return '<div style="font-size:16pt;"> ' + label +' </div>';
+    }
     if (task != "") {
         $(function() {
             var s2h = 0.0002778;
@@ -75,12 +78,13 @@ session_start();
                 var d = records[idx]; 
                 if (!(d[0] in cpuData)) {
                     cpuData[d[0]] = 0;
-                    totalData[d[0]] = [[], []];
+                    totalData[d[0]] = [[], [], []];
                 }
                 if (d[2] > 0 && d[1] > 0) {
                     cpuData[d[0]] = cpuData[d[0]] + d[2] - d[1];
                     totalData[d[0]][0].push(d[1]);
                     totalData[d[0]][1].push(d[2]);
+                    totalData[d[0]][2].push(d[3]);
                 }
             }
             var cpuDataUnsorted = [];
@@ -115,18 +119,21 @@ session_start();
                     show: true
                 }
                 },
-                    bars: {
-                        show: true,
-                        barWidth: 0.45,
-                        order: 1
-                    },
+                bars: {
+                    show: true,
+                    barWidth: 0.45,
+                    order: 1
+                },
+                legend: {
+                    labelFormatter: labform
+                },
                 xaxis: {
                         ticks: barTicks,
                         axisLabelUseCanvas: true,
                         axisLabelFontSizePixels: 24,
                         axisLabelFontFamily: 'Verdana, Arial',
                         axisLabelPadding: 20,
-                        axisLabel: "Task",
+                        axisLabel: "Tasks (top 5)",
                         font: {
                             size: 16,
                             color: "black"
@@ -177,20 +184,21 @@ session_start();
                                        (Math.max(...totalData[key][1])
                                         - startTimes[key]));
             }
-            var NPOINTS = 10;
+            var NPOINTS = 25;
             for (var i = 0; i < NPOINTS; i += 1) {
                 var now = 1.0 * i / NPOINTS * maxInterval;
                 for (var key in totalData) {
                     var pt = startTimes[key] + now; 
                     var val = 0;
+                    var running = new Set([]);
                     for (var idx in totalData[key][0]) {
                         var v0 = totalData[key][0][idx];
                         var v1 = totalData[key][1][idx];
                         if (v0 < pt && pt < v1) {
-                            val += 1;
+                            running.add(totalData[key][2][idx]);
                         }
                     }
-                    series[key].data.push([now * s2h, val]);
+                    series[key].data.push([now * s2h, running.size]);
                 }
             }
             var lineOptions = {
@@ -202,6 +210,9 @@ session_start();
                 },
                 grid: {
                     hoverable: true //IMPORTANT! this is needed for tooltip to work
+                },
+                legend: {
+                    labelFormatter: labform
                 },
                 xaxis: {
                         axisLabelUseCanvas: true,
