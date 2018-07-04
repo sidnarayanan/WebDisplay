@@ -26,6 +26,7 @@ session_start();
     <script src="..//vendor/flot-orderBars/jquery.flot.orderBars.js"></script>
     <script src="..//vendor/flot-tickrotor/jquery.flot.tickrotor.js"></script>
     <script src="..//vendor/flot-tooltip/jquery.flot.tooltip.min.js"></script>
+    <script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
 
 
     <?php
@@ -39,7 +40,8 @@ session_start();
         if ($task != "") {
             $task = $_GET["task"];
             $tasks = explode(",", $task);
-            $cmd = "SELECT task, timestamp, starttime, job_id FROM jobs WHERE ";
+            $cmd = "SELECT task, timestamp, starttime, job_id, lat, lon ";
+            $cmd .= "FROM jobs INNER JOIN nodes ON jobs.host_id = nodes.id WHERE ";
             foreach ($tasks as $t) {
                 $cmd .= "task LIKE ? OR ";
             }
@@ -51,15 +53,133 @@ session_start();
             $stmt->execute();
         }
         $data = $stmt->fetchall(); 
-        echo " <script type=\"text/javascript\"> var records = [";
+        echo " <script type=\"text/javascript\"> ";
+        $mapRawData = array();
+        $latLon = array();
+        $s2h = 0.0002778;
+        $jobSummary = array();
         foreach ($data as $rec) {
-            if ($rec['starttime'] > 0 && $rec['timestamp'] > 0) {
-                echo sprintf("[\"%s\", %d, %d, \"%s\"],", $rec['task'], $rec['starttime'], $rec['timestamp'], $rec['job_id']);
+            $start = floatval($rec['starttime']);
+            $stop = floatval($rec['timestamp']); 
+            if ($start > 0 && $stop > 0 && $stop > $start) {
+                $slat = sprintf("%.2f", floatval($rec['lat']));
+                $slon = sprintf("%.2f", floatval($rec['lon']));
+                if ($slat != 0 && $slon != 0) { 
+                    $period = ($stop - $start) * $s2h; 
+                    if (array_key_exists($slat, $mapRawData)) { 
+                        if (array_key_exists($slon, $mapRawData[$slat])) {
+                            $mapRawData[$slat][$slon] += $period;
+                        } else {
+                            $mapRawData[$slat][$slon] = $period;
+                            $latLon[] = array($slat, $slon);
+                        }
+                    } else { 
+                        $mapRawData[$slat] = array();
+                        $mapRawData[$slat][$slon] = $period;
+                        $latLon[] = array($slat, $slon);
+                    }
+                }
+                $thisTask = $rec['task'];
+                if (!array_key_exists($thisTask, $jobSummary)) {
+                    $jobSummary[$thisTask] = array(
+                        'name' => $thisTask,
+                        'minstart' => $start,
+                        'maxstop' => $stop,
+                        'cpu' => 0,
+                    );
+                }
+                $jobSummary[$thisTask]['minstart'] = min($start, $jobSummary[$thisTask]['minstart']);
+                $jobSummary[$thisTask]['maxstop'] = max($stop, $jobSummary[$thisTask]['maxstop']);
+                $jobSummary[$thisTask]['cpu'] += ( ($stop - $start) * $s2h );
             }
         }
-        echo " ]; </script>";
+        echo "var mapLat = [";  foreach ($latLon as $x) { echo sprintf("%.2f,", $x[0]); } echo "];"; 
+        echo "var mapLon = [";  foreach ($latLon as $x) { echo sprintf("%.2f,", $x[1]); } echo "];"; 
+        echo "var mapRawSizes = [";  
+            foreach ($latLon as $x) { echo sprintf("%.2f,", $mapRawData[$x[0]][$x[1]]); } 
+            echo "];"; 
+
+        function cmp($x, $y) { 
+            if ($x == $y) 
+                return 0;
+            return ($x['cpu'] < $y['cpu']) ? 1 : -1;
+        }
+        uasort($jobSummary, 'cmp');
+        $ncount = 0; 
+        $topTasks = array();
+        foreach ($jobSummary as $taskname => $job) {
+            ++$ncount; 
+            $topTasks[] = $taskname;
+            if ($ncount == 5) {
+                break;
+            }
+        }
+        echo " var barTicks=["; 
+            foreach ($topTasks as $taskname) { echo sprintf("\"%s\",",$taskname); } 
+            echo "];";
+        echo "var barCpuY=["; 
+            foreach ($topTasks as $taskname) { echo sprintf("%f,",$jobSummary[$taskname]['cpu']); } 
+            echo "];";
+        echo "var barUserY=["; 
+            foreach ($topTasks as $taskname) { 
+                echo sprintf("%f,",$s2h*($jobSummary[$taskname]['maxstop']-$jobSummary[$taskname]['minstart'])); 
+            } 
+            echo "];";
+        $maxInterval = 0;
+        foreach ($topTasks as $taskname) {
+            $job = $jobSummary[$taskname];
+            $maxInterval = max($maxInterval, $job['maxstop'] - $job['minstart']);
+        }
+        $jobHistory = array();
+        $NPOINTS = 100;
+        $first = true;
+        echo "var lineX = [";
+        foreach ($topTasks as $taskname) {
+            $jobHistory[$taskname] = array(
+                'name' => $taskname,
+                'ncores' => array()
+            );
+            for ($i = 0; $i < $NPOINTS; ++$i) {
+                $jobHistory[$taskname]['ncores'][] = 0;
+                $now = 1.0 * $i / $NPOINTS * $maxInterval;
+                if ($first) {
+                    echo sprintf("%.3f,",$now * $s2h);
+                }
+            }
+            if ($first) {
+                echo "];";
+                $first = false;
+            }
+        }
+        if ($first) {
+            echo "];";
+        }
+        // do it this way to avoid building large PHP arrays
+        foreach ($data as $rec) {
+            if (in_array($rec['task'], $topTasks)) {
+                $taskname = $rec['task'];
+                $job = $jobSummary[$taskname];
+                for ($i = 0; $i < $NPOINTS; ++$i) {
+                    $now = 1.0 * $i / $NPOINTS * $maxInterval + $job['minstart'];
+                    if ($rec['starttime'] < $now && $rec['timestamp'] > $now) {
+                        $jobHistory[$taskname]['ncores'][$i] += 1;
+                    }
+                }
+            }
+        }
+        echo "var lineData = {}; ";
+        foreach ($topTasks as $taskname) {
+            $history = $jobHistory[$taskname];
+            echo sprintf("lineData[\"%s\"]=[",$taskname);
+            for ($i = 0; $i < $NPOINTS; ++$i) {
+                echo sprintf("%d,",$history['ncores'][$i]);
+            }
+            echo "];";
+        }
+        
+        echo " var records=[]; var totalData={};  </script>";
     } else {
-        echo " <script type=\"text/javascript\"> var records = []; </script>";
+        echo " <script type=\"text/javascript\"> var lineData={}; var lineX=[]; var mapLat=[]; var mapLon=[]; var mapRawSizes=[]; var barTicks=[]; var barCpuY=[]; var barUserY=[];  </script>";
     }
     $db = null;        
     ?>
@@ -71,185 +191,145 @@ session_start();
         $(function() {
             var s2h = 0.0002778;
 
-            // bar chart stuff
-            var cpuData = {};
-            var totalData = {};
-            for (var idx in records) {
-                var d = records[idx]; 
-                if (!(d[0] in cpuData)) {
-                    cpuData[d[0]] = 0;
-                    totalData[d[0]] = [[], [], []];
-                }
-                if (d[2] > 0 && d[1] > 0) {
-                    cpuData[d[0]] = cpuData[d[0]] + d[2] - d[1];
-                    totalData[d[0]][0].push(d[1]);
-                    totalData[d[0]][1].push(d[2]);
-                    totalData[d[0]][2].push(d[3]);
-                }
+            // map first 
+            var mapSizes = [];
+            var mapColors = [];
+            var mapLabels = [];
+            var mapScale = 30. / Math.log(Math.max(...mapRawSizes));
+            for (var idx in mapLat) {
+                var lat = mapLat[idx];
+                var lon = mapLon[idx];
+                var val = mapRawSizes[idx];
+                mapColors.push(val);
+                mapSizes.push(Math.log(val) * mapScale);
+                mapLabels.push(val.toFixed(2) + ' H')
             }
-            var cpuDataUnsorted = [];
-            var totalDataUnsorted = [];
-            var barTicksUnsorted = [];
-            var idx = 0;
-            for (var key in cpuData) {
-                cpuDataUnsorted.push([idx, cpuData[key] * s2h]);
-                totalDataUnsorted.push([idx, s2h * (Math.max(...totalData[key][1]) 
-                                                    - Math.min(...totalData[key][0]))]);
-                barTicksUnsorted.push([idx, key])
-                idx += 1; 
-            }
-            cpuDataUnsorted.sort(function(x, y) { return y[1] - x[1]; });
-            var cpuDataSet = {label: "CPU Time", data:[], yaxis:1};
-            var totalDataSet = {label: "User Time", data:[], yaxis:2};
-            var barTicks= [];
-            var realIdx = 0;
-            for (var idx in cpuDataUnsorted) {
-                var v = cpuDataUnsorted[idx];
-                cpuDataSet.data.push([realIdx,v[1]]);
-                barTicks.push([realIdx,barTicksUnsorted[v[0]][1]]);
-                totalDataSet.data.push([realIdx, totalDataUnsorted[v[0]][1]]);
-                realIdx += 1; 
-                if (realIdx == 6) { // max
-                    break;
-                }
-            }
-            var barOptions = {
-                series: {
-                bars: {
-                    show: true
-                }
-                },
-                bars: {
-                    show: true,
-                    barWidth: 0.45,
-                    order: 1
-                },
-                legend: {
-                    labelFormatter: labform
-                },
-                xaxis: {
-                        ticks: barTicks,
-                        axisLabelUseCanvas: true,
-                        axisLabelFontSizePixels: 24,
-                        axisLabelFontFamily: 'Verdana, Arial',
-                        axisLabelPadding: 20,
-                        axisLabel: "Tasks (top 5)",
-                        font: {
-                            size: 16,
-                            color: "black"
-                        },
-                        rotateTicks: 30
-                },
-                yaxis: {
-                    axisLabelUseCanvas: true,
-                    axisLabelFontSizePixels: 24,
-                    axisLabelFontFamily: 'Verdana, Arial',
-                    axisLabelPadding: 10,
-                    font: {
-                        size: 16,
-                        color: "black"
+            var mapData = [{
+                type: 'scattergeo',
+                mode: 'markers',
+                text: mapLabels,
+                lon: mapLon,
+                lat: mapLat,
+                marker: {
+                    size: mapSizes,
+                    color: mapColors,
+                    cmin: 0,
+                    cmax: Math.max(...mapColors),
+                    colorscale: 'Jet',
+                    //*
+                    colorbar: {
+                        thicknessmode: 'fraction',
+                        thickness: 0.025,
+                        lenmode: 'fraction',
+                        len: 0.9,
+                        title: 'CPU',
+                        ticksuffix: 'H',
+                        showticksuffix: 'last'
+                    },
+                     //*/
+                    line: {
+                        color: 'black'
                     }
-                },
-                yaxes: [
-                    { position: "left",
-                      axisLabel: "CPU Time [Hours]"
-                    },
-                    { position: "right",
-                      axisLabel: "User Time [Hours]"
-                    },
-                ],
-                grid: {
-                hoverable: true,
-                        borderWidth: 2
-                },
-                tooltip: true,
-                tooltipOpts: {
-                content: "task=%x, time=%yh"
                 }
+            }];
+            var mapLonRange = [Math.min(...mapLon)-5, Math.max(...mapLon)+5];
+            var mapLatRange = [Math.min(...mapLat)-5, Math.max(...mapLat)+5];
+            var mapRange = 0.5 * Math.max(mapLonRange[1] - mapLonRange[0],
+                                          mapLatRange[1] - mapLatRange[0]);
+            var mapCenter = 0.5 * (mapLonRange[0] + mapLonRange[1]);
+            mapLonRange[0] = mapCenter - mapRange*2;
+            mapLonRange[1] = mapCenter + mapRange*2;
+            mapCenter = 0.5 * (mapLatRange[0] + mapLatRange[1]);
+            mapLatRange[0] = mapCenter - mapRange;
+            mapLatRange[1] = mapCenter + mapRange;
+            var mapLayout = {
+                    margin: { 
+                        l: 10, r: 10, b: 10, t: 40,
+                    },
+                    font: {
+                        size: 16
+                    },
+                    title: 'Global CPU Usage (all tasks)',
+                    titlefont: {
+                        size: 24
+                    },
+                    geo: {
+                        scope: 'world',
+                        resolution: 50, 
+                        lonaxis: {
+                            'range': mapLonRange 
+                        },
+                        lataxis: {
+                            'range': mapLatRange 
+                        },
+                        showrivers: true,
+                        rivercolor: 'rgba(28,200,225,.2)',
+                        showocean: true,
+                        oceancolor: 'rgba(28,200,225,.2)',
+                        showlakes: true,
+                        lakecolor: 'rgba(28,200,225,.2)',
+                        showland: true,
+                        landcolor: 'rgba(86,140,115,.2)',
+                        showcountries: true,
+                        countrycolor: '#d3d3d3',
+                        countrywidth: 1.5,
+                        showsubunits: true,
+                        subunitcolor: '#d3d3d3',
+                        subunitwidth: 1.5,
+                    }
             };
-            $.plot($("#flot-cputime"), [cpuDataSet, totalDataSet], barOptions);
+            Plotly.newPlot('plot-map', mapData, mapLayout);
+
+            // bar chart stuff
+            var cpuDataSet = {name: "CPU Time", x:barTicks, y:barCpuY, type:'bar', showlegend:false};
+            var totalDataSet = {name: "User Time", x:barTicks, y:barUserY, yaxis:'y2', type:'bar', showlegend:false};
+            var barLayout = {
+                    margin: { 
+                        t: 40
+                    },
+                    font: {
+                        size: 16
+                    },
+                    title: 'Task Breakdown (top 5)',
+                    barmode: 'group',
+                    titlefont: {
+                        size: 24
+                    },
+                    yaxis: {title: 'CPU Time [Hours]', type: 'log', autorange: true},
+                    yaxis2: {title: 'Real Time [Hours]', overlaying:'y', side:'right', type: 'log', autorange: true},
+            };
+            var inv1 = {x:[cpuDataSet.x[0]], y: [0], type: 'bar', hoverinfo: 'none', showlegend: false};
+            var inv2 = {x:[totalDataSet.x[0]], y: [0], type: 'bar', hoverinfo: 'none', showlegend: false, yaxis: 'y2'};
+            Plotly.newPlot('plot-bar', [cpuDataSet, inv1, inv2,  totalDataSet], barLayout);
 
             // line plot stuff
-            var maxInterval = 0;
-            var startTimes = {}
             var series = {};
-            for (var key in totalData) {
-                series[key] = {label: key, data: []};
-                startTimes[key] = 0;
+            for (var idx in barTicks) {
+                var key = barTicks[idx];
+                series[key] = {label: key, x: lineX, y: lineData[key], name: key, type: 'scatter', fill: 'tozeroy'};
             }
-            for (var key in totalData) {
-                // figure out ranges 
-                startTimes[key] = Math.min(...totalData[key][0]);
-                maxInterval = Math.max(maxInterval,
-                                       (Math.max(...totalData[key][1])
-                                        - startTimes[key]));
-            }
-            var NPOINTS = 25;
-            for (var i = 0; i < NPOINTS; i += 1) {
-                var now = 1.0 * i / NPOINTS * maxInterval;
-                for (var key in totalData) {
-                    var pt = startTimes[key] + now; 
-                    var val = 0;
-                    var running = new Set([]);
-                    for (var idx in totalData[key][0]) {
-                        var v0 = totalData[key][0][idx];
-                        var v1 = totalData[key][1][idx];
-                        if (v0 < pt && pt < v1) {
-                            running.add(totalData[key][2][idx]);
-                        }
-                    }
-                    series[key].data.push([now * s2h, running.size]);
-                }
-            }
-            var lineOptions = {
-                series: {
-                    lines: {
-                        show: true,
-                        fill: 0.2,
+            var lineLayout = {
+                    margin: { 
+                         t: 40,
                     },
-                },
-                grid: {
-                    hoverable: true //IMPORTANT! this is needed for tooltip to work
-                },
-                legend: {
-                    labelFormatter: labform
-                },
-                xaxis: {
-                        axisLabelUseCanvas: true,
-                        axisLabelFontSizePixels: 24,
-                        axisLabelFontFamily: 'Verdana, Arial',
-                        axisLabelPadding: 20,
-                        axisLabel: "Hours since start",
-                        font: {
-                            size: 16,
-                            color: "black"
-                        }
-                },
-                yaxis: {
-                    axisLabelUseCanvas: true,
-                    axisLabelFontSizePixels: 24,
-                    axisLabelFontFamily: 'Verdana, Arial',
-                    axisLabelPadding: 10,
-                    axisLabel: "Number of Cores",
                     font: {
-                        size: 16,
-                        color: "black"
-                    }
-                },
-                tooltip: true,
-                tooltipOpts: {
-                    content: "%s - %y.0 running after %x.1 hours",
-                    shifts: {
-                        x: -60,
-                        y: 25
-                    }
-                }
+                        size: 16
+                    },
+                    title: 'Historical CPU Usage (top 5)',
+                    titlefont: {
+                        size: 24
+                    },
+                    yaxis: {title: 'Number of Cores', type: 'log', autorange: true},
+                    xaxis: {title: 'Hours since start', type: 'log', autorange: true},
+                    showlegend: true,
+                    legend: { x: 0.7, y: 0, bgcolor: 'rgba(255,255,255,.2)'}, 
             };
             var toplot = [];
-            for (var key in series) {
+            for (var keyIdx in barTicks) {
+                var key = barTicks[keyIdx]; 
                 toplot.push(series[key]);
             }
-            $.plot($("#flot-njobs"), toplot, lineOptions);
+            Plotly.newPlot('plot-line', toplot, lineLayout);
 
         });
     }
@@ -283,9 +363,18 @@ session_start();
                 <div class="col-lg-6">
                     <div class="panel panel-default">
                         <div class="panel-body">
-                            <div class="flot-chart">
-                                <div class="flot-chart-content" id="flot-cputime"></div>
-                            </div>
+                                <div id="plot-map"></div>
+                        </div>
+                        <!-- /.panel-body -->
+                    </div>
+                    <!-- /.panel -->
+                </div>
+                <!-- /.col-lg-6 -->
+                <!-- /.col-lg-6 -->
+                <div class="col-lg-6">
+                    <div class="panel panel-default">
+                        <div class="panel-body">
+                                <div id="plot-line"></div>
                         </div>
                         <!-- /.panel-body -->
                     </div>
@@ -295,9 +384,7 @@ session_start();
                 <div class="col-lg-6">
                     <div class="panel panel-default">
                         <div class="panel-body">
-                            <div class="flot-chart">
-                                <div class="flot-chart-content" id="flot-njobs"></div>
-                            </div>
+                                <div id="plot-bar"></div>
                         </div>
                         <!-- /.panel-body -->
                     </div>
