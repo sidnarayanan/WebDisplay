@@ -18,14 +18,6 @@ session_start();
     <link href="..//vendor/morrisjs/morris.css" rel="stylesheet">
     <link href="..//vendor/font-awesome/css/font-awesome.min.css" rel="stylesheet" type="text/css">
     <script src="..//vendor/jquery/jquery.min.js"></script>
-    <script src="..//vendor/flot/jquery.flot.js"></script>
-    <script src="..//vendor/flot/jquery.flot.pie.js"></script>
-    <script src="..//vendor/flot/jquery.flot.resize.js"></script>
-    <script src="..//vendor/flot/jquery.flot.time.js"></script>
-    <script src="..//vendor/flot-axislabels/jquery.flot.axislabels.js"></script>
-    <script src="..//vendor/flot-orderBars/jquery.flot.orderBars.js"></script>
-    <script src="..//vendor/flot-tickrotor/jquery.flot.tickrotor.js"></script>
-    <script src="..//vendor/flot-tooltip/jquery.flot.tooltip.min.js"></script>
     <script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
 
 
@@ -37,28 +29,25 @@ session_start();
     }
     echo " <script type=\"text/javascript\"> var task = \"".$task."\"; </script>";
     if ($task != "") {
-        if ($task != "") {
-            $task = $_GET["task"];
-            $tasks = explode(",", $task);
-            $cmd = "SELECT task, timestamp, starttime, job_id, lat, lon ";
-            $cmd .= "FROM jobs INNER JOIN nodes ON jobs.host_id = nodes.id WHERE ";
-            foreach ($tasks as $t) {
-                $cmd .= "task LIKE ? OR ";
-            }
-            $cmd .= "0";
-            $stmt = $db->prepare($cmd); 
-            $stmt->execute($tasks);
-        } else { 
-            $stmt = $db->prepare("SELECT task, timestamp, starttime, job_id FROM jobs"); 
-            $stmt->execute();
+        $task = $_GET["task"];
+        $tasks = explode(",", $task);
+        $cmd = "SELECT task, timestamp, starttime, job_id, lat, lon ";
+        $cmd .= "FROM jobs INNER JOIN nodes ON jobs.host_id = nodes.id WHERE ";
+        foreach ($tasks as $t) {
+            $cmd .= "task LIKE ? OR ";
         }
-        $data = $stmt->fetchall(); 
+        $cmd .= "0";
+        $stmt = $db->prepare($cmd); 
+
+//        $data = $stmt->fetchall(); 
         echo " <script type=\"text/javascript\"> ";
         $mapRawData = array();
         $latLon = array();
         $s2h = 0.0002778;
         $jobSummary = array();
-        foreach ($data as $rec) {
+
+        $stmt->execute($tasks);
+        while ($rec = $stmt->fetch()) {
             $start = floatval($rec['starttime']);
             $stop = floatval($rec['timestamp']); 
             if ($start > 0 && $stop > 0 && $stop > $start) {
@@ -110,7 +99,7 @@ session_start();
         foreach ($jobSummary as $taskname => $job) {
             ++$ncount; 
             $topTasks[] = $taskname;
-            if ($ncount == 5) {
+            if ($ncount == 6) {
                 break;
             }
         }
@@ -131,19 +120,27 @@ session_start();
             $maxInterval = max($maxInterval, $job['maxstop'] - $job['minstart']);
         }
         $jobHistory = array();
-        $NPOINTS = 100;
+        $NPOINTS = 50;
         $first = true;
         echo "var lineX = [";
         foreach ($topTasks as $taskname) {
             $jobHistory[$taskname] = array(
                 'name' => $taskname,
-                'ncores' => array()
+                'ncores' => array(),
+                'N' => 0,
+                'sum' => 0,
+                'var' => 0,
+                'shift' => 0,
+                'min' => 0,
+                'max' => 0,
             );
             for ($i = 0; $i < $NPOINTS; ++$i) {
-                $jobHistory[$taskname]['ncores'][] = 0;
-                $now = 1.0 * $i / $NPOINTS * $maxInterval;
+                $jobHistory[$taskname]['ncores'][] = 0.01;
                 if ($first) {
-                    echo sprintf("%.3f,",$now * $s2h);
+                    //$now = 1.0 * $i / $NPOINTS * $maxInterval * $s2h;
+                    $now = 100. * $i / $NPOINTS;
+                    //$now = pow(10, 1.0 * ($i + 1) / $NPOINTS * log($maxInterval, 10)) * $s2h;
+                    echo sprintf("%.3f,",$now);
                 }
             }
             if ($first) {
@@ -155,19 +152,45 @@ session_start();
             echo "];";
         }
         // do it this way to avoid building large PHP arrays
-        foreach ($data as $rec) {
+        $stmt->execute($tasks);
+        while ($rec = $stmt->fetch()) {
             if (in_array($rec['task'], $topTasks)) {
                 $taskname = $rec['task'];
                 $job = $jobSummary[$taskname];
                 for ($i = 0; $i < $NPOINTS; ++$i) {
-                    $now = 1.0 * $i / $NPOINTS * $maxInterval + $job['minstart'];
+                    $now = 1.0 * $i / $NPOINTS * ($job['maxstop'] - $job['minstart']) + $job['minstart'];
+                    //$now = 1.0 * $i / $NPOINTS * $maxInterval + $job['minstart'];
+                    //$now = pow(10, 1.0 * ($i + 1) / $NPOINTS * log($maxInterval, 10)) + $job['minstart'];
                     if ($rec['starttime'] < $now && $rec['timestamp'] > $now) {
                         $jobHistory[$taskname]['ncores'][$i] += 1;
+                    }
+                }
+                if ($rec['starttime'] > 0 && $rec['timestamp'] > 0) { 
+                    $length = ($rec['timestamp'] - $rec['starttime']) * $s2h;
+                    if ($length < 0.01) // makes no sense
+                        continue;
+                    if ($jobHistory[$taskname]['N'] == 0) {
+                        $jobHistory[$taskname]['shift'] = $length;
+                        $jobHistory[$taskname]['N'] = 1;
+                        $jobHistory[$taskname]['max'] = $length;
+                        $jobHistory[$taskname]['min'] = $length;
+                    } else {
+                        $length -= $jobHistory[$taskname]['shift'];
+                        $oldmean = $jobHistory[$taskname]['sum'] / $jobHistory[$taskname]['N']; 
+                        $jobHistory[$taskname]['sum'] += $length;
+                        $jobHistory[$taskname]['N'] += 1;
+                        $N = $jobHistory[$taskname]['N'];
+                        $mean = $jobHistory[$taskname]['sum'] / $jobHistory[$taskname]['N']; 
+                        $oldvar = $jobHistory[$taskname]['var'];
+                        $jobHistory[$taskname]['var'] = ($N - 1) / $N * ( $oldvar + ($oldmean * $oldmean)) + ($length * $length / $N) - ($mean * $mean);
+                        $jobHistory[$taskname]['min'] = min($jobHistory[$taskname]['min'], $length);
+                        $jobHistory[$taskname]['max'] = max($jobHistory[$taskname]['max'], $length);
                     }
                 }
             }
         }
         echo "var lineData = {}; ";
+        echo "var boxData = {}; ";
         foreach ($topTasks as $taskname) {
             $history = $jobHistory[$taskname];
             echo sprintf("lineData[\"%s\"]=[",$taskname);
@@ -175,6 +198,17 @@ session_start();
                 echo sprintf("%d,",$history['ncores'][$i]);
             }
             echo "];";
+            echo sprintf("boxData[\"%s\"]=[",$taskname);
+            $min = $history['min'] + $history['shift'];
+            echo sprintf("%f,", $min);
+            $mean = $history['sum'] / $history['N'] + $history['shift'];
+            $stdev = sqrt($history['var']);
+            echo sprintf("%f,", max($min,  $mean - $stdev));
+            echo sprintf("%f,", $mean);
+            echo sprintf("%f,", $mean + $stdev);
+            echo sprintf("%f", $history['max'] + $history['shift']);
+            echo "];";
+
         }
         
         echo " var records=[]; var totalData={};  </script>";
@@ -184,6 +218,7 @@ session_start();
     $db = null;        
     ?>
     <script type="text/javascript">
+    console.log(boxData);
     function labform(label, series)  {
         return '<div style="font-size:16pt;"> ' + label +' </div>';
     }
@@ -192,17 +227,27 @@ session_start();
             var s2h = 0.0002778;
 
             // map first 
+            var mapDiv = document.getElementById('plot-map');
             var mapSizes = [];
             var mapColors = [];
             var mapLabels = [];
-            var mapScale = 30. / Math.log(Math.max(...mapRawSizes));
+            var mapScale = 30. / Math.log10(Math.max(...mapRawSizes));
             for (var idx in mapLat) {
                 var lat = mapLat[idx];
                 var lon = mapLon[idx];
                 var val = mapRawSizes[idx];
-                mapColors.push(val);
-                mapSizes.push(Math.log(val) * mapScale);
+                mapColors.push(Math.log10(val));
+                mapSizes.push(Math.log10(val) * mapScale);
                 mapLabels.push(val.toFixed(2) + ' H')
+            }
+            var mapTicks = [];
+            var mapTickTexts = [];
+            var NTICKS = 6;
+            for (var  i = 0; i != NTICKS; ++i) {
+                var x = Math.ceil(Math.max(...mapColors) / NTICKS) * i;
+                mapTicks.push(x);
+                var text = "10<sup>"+x.toString()+"</sup>";
+                mapTickTexts.push(text);
             }
             var mapData = [{
                 type: 'scattergeo',
@@ -215,18 +260,17 @@ session_start();
                     color: mapColors,
                     cmin: 0,
                     cmax: Math.max(...mapColors),
-                    colorscale: 'Jet',
-                    //*
+                    colorscale: 'Portland',
                     colorbar: {
                         thicknessmode: 'fraction',
                         thickness: 0.025,
                         lenmode: 'fraction',
                         len: 0.9,
-                        title: 'CPU',
-                        ticksuffix: 'H',
-                        showticksuffix: 'last'
+                        title: 'CPU [H]',
+                        tickmode: 'array',
+                        tickvals: mapTicks,
+                        ticktext: mapTickTexts,
                     },
-                     //*/
                     line: {
                         color: 'black'
                     }
@@ -234,17 +278,17 @@ session_start();
             }];
             var mapLonRange = [Math.min(...mapLon)-5, Math.max(...mapLon)+5];
             var mapLatRange = [Math.min(...mapLat)-5, Math.max(...mapLat)+5];
-            var mapRange = 0.5 * Math.max(mapLonRange[1] - mapLonRange[0],
-                                          mapLatRange[1] - mapLatRange[0]);
+            var mapRange = 1.2 * Math.max(0.5*(mapLonRange[1] - mapLonRange[0]),
+                                          (mapLatRange[1] - mapLatRange[0]));
             var mapCenter = 0.5 * (mapLonRange[0] + mapLonRange[1]);
-            mapLonRange[0] = mapCenter - mapRange*2;
-            mapLonRange[1] = mapCenter + mapRange*2;
+            mapLonRange[0] = mapCenter - mapRange;
+            mapLonRange[1] = mapCenter + mapRange;
             mapCenter = 0.5 * (mapLatRange[0] + mapLatRange[1]);
-            mapLatRange[0] = mapCenter - mapRange;
-            mapLatRange[1] = mapCenter + mapRange;
+            mapLatRange[0] = mapCenter - mapRange*0.5;
+            mapLatRange[1] = mapCenter + mapRange*0.5;
             var mapLayout = {
                     margin: { 
-                        l: 10, r: 10, b: 10, t: 40,
+                        l: 10, r: 10, b: 20, t: 40,
                     },
                     font: {
                         size: 16
@@ -254,82 +298,163 @@ session_start();
                         size: 24
                     },
                     geo: {
+                        lataxis: { showgrid: true },
+                        lonaxis: { showgrid: true },
                         scope: 'world',
-                        resolution: 50, 
+                        resolution: '110', 
                         lonaxis: {
-                            'range': mapLonRange 
+                            range: mapLonRange ,
+                            fixedrange: true
                         },
                         lataxis: {
-                            'range': mapLatRange 
+                            range: mapLatRange, 
+                            fixedrange: true
                         },
+                        projection: {
+                            type: 'robinson'
+                        },
+                        showframe: false,
                         showrivers: true,
-                        rivercolor: 'rgba(28,200,225,.2)',
+                        rivercolor: '#fff',
                         showocean: true,
-                        oceancolor: 'rgba(28,200,225,.2)',
+                        oceancolor: '#fff',
                         showlakes: true,
-                        lakecolor: 'rgba(28,200,225,.2)',
+                        lakecolor: '#fff',
                         showland: true,
-                        landcolor: 'rgba(86,140,115,.2)',
+                        landcolor: '#bbb',
                         showcountries: true,
-                        countrycolor: '#d3d3d3',
-                        countrywidth: 1.5,
+                        countrycolor: '#000000',
+                        countrywidth: 1,
                         showsubunits: true,
-                        subunitcolor: '#d3d3d3',
-                        subunitwidth: 1.5,
-                    }
+                        subunitcolor: '#000000',
+                        subunitwidth: 1,
+                    },
+                    width: mapDiv.offsetWidth,
+                    height: 0.5 * mapDiv.offsetWidth,
             };
-            Plotly.newPlot('plot-map', mapData, mapLayout);
+            Plotly.newPlot(mapDiv, mapData, mapLayout);
 
             // bar chart stuff
+            var barDiv = document.getElementById('plot-bar');
             var cpuDataSet = {name: "CPU Time", x:barTicks, y:barCpuY, type:'bar', showlegend:false};
             var totalDataSet = {name: "User Time", x:barTicks, y:barUserY, yaxis:'y2', type:'bar', showlegend:false};
             var barLayout = {
                     margin: { 
                         t: 40
                     },
+                    xaxis: {
+                        fixedrange: true
+                    },
+                    yaxis: {
+                        fixedrange: true
+                    },
                     font: {
                         size: 16
                     },
-                    title: 'Task Breakdown (top 5)',
+                    title: 'Task Breakdown (top 6)',
                     barmode: 'group',
                     titlefont: {
                         size: 24
                     },
-                    yaxis: {title: 'CPU Time [Hours]', type: 'log', autorange: true},
-                    yaxis2: {title: 'Real Time [Hours]', overlaying:'y', side:'right', type: 'log', autorange: true},
+                    yaxis: {title: 'CPU Time [Hours]', type: 'log', autorange: true, exponentformat: 'power'},
+                    yaxis2: {title: 'Real Time [Hours]', overlaying:'y', side:'right', type: 'log', autorange: true, exponentformat: 'power'},
+                    width: barDiv.offsetWidth,
+                    height: 0.5 * barDiv.offsetWidth,
             };
             var inv1 = {x:[cpuDataSet.x[0]], y: [0], type: 'bar', hoverinfo: 'none', showlegend: false};
             var inv2 = {x:[totalDataSet.x[0]], y: [0], type: 'bar', hoverinfo: 'none', showlegend: false, yaxis: 'y2'};
-            Plotly.newPlot('plot-bar', [cpuDataSet, inv1, inv2,  totalDataSet], barLayout);
+            Plotly.newPlot(barDiv, [cpuDataSet, inv1, inv2,  totalDataSet], barLayout);
 
             // line plot stuff
+            var lineDiv = document.getElementById('plot-line');
             var series = {};
             for (var idx in barTicks) {
                 var key = barTicks[idx];
-                series[key] = {label: key, x: lineX, y: lineData[key], name: key, type: 'scatter', fill: 'tozeroy'};
+                var tmpData = [];
+                var scale = 100.0 / Math.max(...lineData[key]);
+                for (var idx in lineData[key]) {
+                    tmpData.push(lineData[key][idx] * scale);
+                }
+                series[key] = {label: key, x: lineX, y: tmpData, name: key, type: 'scatter'};
             }
             var lineLayout = {
                     margin: { 
-                         t: 40,
+                        t: 40, r: 20
                     },
                     font: {
                         size: 16
                     },
-                    title: 'Historical CPU Usage (top 5)',
+                    yaxis: {
+                        fixedrange: true
+                    },
+                    title: 'Job Evolution (top 6)',
                     titlefont: {
                         size: 24
                     },
-                    yaxis: {title: 'Number of Cores', type: 'log', autorange: true},
-                    xaxis: {title: 'Hours since start', type: 'log', autorange: true},
+                    yaxis: {title: 'Relative resource utilization [%]', autorange: true},
+                    xaxis: {title: 'Task progress [%]', autorange: true},
                     showlegend: true,
-                    legend: { x: 0.7, y: 0, bgcolor: 'rgba(255,255,255,.2)'}, 
+                    legend: { x: 0.7, y: 1, bgcolor: 'rgba(255,255,255,.5)'}, 
+                    width: lineDiv.offsetWidth,
+                    height: 0.5 * lineDiv.offsetWidth,
             };
             var toplot = [];
             for (var keyIdx in barTicks) {
                 var key = barTicks[keyIdx]; 
                 toplot.push(series[key]);
             }
-            Plotly.newPlot('plot-line', toplot, lineLayout);
+            Plotly.newPlot(lineDiv, toplot, lineLayout);
+
+            // line plot stuff
+            var boxDiv = document.getElementById('plot-box');
+            var boxLayout = {
+                    margin: { 
+                        t: 40, r: 20
+                    },
+                    font: {
+                        size: 16
+                    },
+                    yaxis: {
+                        fixedrange: true
+                    },
+                    title: 'Job Spread (top 6)',
+                    titlefont: {
+                        size: 24
+                    },
+                    yaxis: {title: 'Job CPU Time [Hours]', autorange: true, type: 'log', exponentformat: 'power'},
+                    showlegend: false,
+                    width: boxDiv.offsetWidth,
+                    height: 0.5 * boxDiv.offsetWidth,
+            };
+            var toplot = [];
+            for (var key in boxData) {
+                toplot.push({
+                    name: key,
+                    y: boxData[key],
+                    type: 'box',
+                    hoverinfo: 'x',
+                })
+            }
+            Plotly.newPlot(boxDiv, toplot, boxLayout);
+
+            window.onresize = function() {
+                Plotly.relayout(lineDiv, {
+                    width:  lineDiv.offsetWidth,
+                    height: 0.5 * lineDiv.offsetWidth,
+                });
+                Plotly.relayout(barDiv, {
+                    width:  barDiv.offsetWidth,
+                    height: 0.5 * barDiv.offsetWidth,
+                });
+                Plotly.relayout(mapDiv, {
+                    width:  mapDiv.offsetWidth,
+                    height: 0.5 * mapDiv.offsetWidth,
+                });
+                Plotly.relayout(boxDiv, {
+                    width:  boxDiv.offsetWidth,
+                    height: 0.5 * boxDiv.offsetWidth,
+                });
+            }
 
         });
     }
@@ -359,38 +484,10 @@ session_start();
                     </div>
                     <!-- /.panel -->
                 </div>
-                <!-- /.col-lg-6 -->
-                <div class="col-lg-6">
-                    <div class="panel panel-default">
-                        <div class="panel-body">
-                                <div id="plot-map"></div>
-                        </div>
-                        <!-- /.panel-body -->
-                    </div>
-                    <!-- /.panel -->
-                </div>
-                <!-- /.col-lg-6 -->
-                <!-- /.col-lg-6 -->
-                <div class="col-lg-6">
-                    <div class="panel panel-default">
-                        <div class="panel-body">
-                                <div id="plot-line"></div>
-                        </div>
-                        <!-- /.panel-body -->
-                    </div>
-                    <!-- /.panel -->
-                </div>
-                <!-- /.col-lg-6 -->
-                <div class="col-lg-6">
-                    <div class="panel panel-default">
-                        <div class="panel-body">
-                                <div id="plot-bar"></div>
-                        </div>
-                        <!-- /.panel-body -->
-                    </div>
-                    <!-- /.panel -->
-                </div>
-                <!-- /.col-lg-6 -->
+                <div class="col-xl-4 col-lg-6">  <div class="panel panel-default">  <div class="panel-body">  <div id="plot-map"></div>  </div>  </div>  </div>
+                <div class="col-xl-4 col-lg-6">  <div class="panel panel-default">  <div class="panel-body">  <div id="plot-line"></div>  </div>  </div>  </div>
+                <div class="col-xl-4 col-lg-6">  <div class="panel panel-default">  <div class="panel-body">  <div id="plot-bar"></div>  </div>  </div>  </div>
+                <div class="col-xl-4 col-lg-6">  <div class="panel panel-default">  <div class="panel-body">  <div id="plot-box"></div>  </div>  </div>  </div>
             </div>
             <!-- /.row -->
 
