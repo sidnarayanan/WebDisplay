@@ -981,9 +981,21 @@ function pr($data, $die = false) {
 	<meta name="viewport" content="width=device-width; initial-scale=1.0; maximum-scale=1.0; minimum-scale=1.0; user-scalable=no; target-densityDpi=device-dpi" />
 	<style>
 	</style>
-	<?php if($listing->enableTheme): ?>
-	<link href="https://maxcdn.bootstrapcdn.com/bootswatch/3.3.5/yeti/bootstrap.min.css" rel="stylesheet" integrity="sha256-gJ9rCvTS5xodBImuaUYf1WfbdDKq54HCPz9wk8spvGs= sha512-weqt+X3kGDDAW9V32W7bWc6aSNCMGNQsdOpfJJz/qD/Yhp+kNeR+YyvvWojJ+afETB31L0C4eO0pcygxfTgjgw==" crossorigin="anonymous">
-	<?php endif; ?>
+	<?php 
+		if ($listing->enableTheme) {
+		    $darkmode = false;
+		    if (!empty($_GET["toggledark"])) {
+			if (strpos($_GET["toggledark"], "Dark") !== false) {
+			    $darkmode = true;
+			}
+		    }
+		    if ($darkmode) {
+			echo "<link href=\"https://stackpath.bootstrapcdn.com/bootswatch/3.3.7/darkly/bootstrap.min.css\" rel=\"stylesheet\"  crossorigin=\"anonymous\">";
+		    } else {
+			echo "<link href=\"https://stackpath.bootstrapcdn.com/bootswatch/3.3.7/simplex/bootstrap.min.css\" rel=\"stylesheet\"  crossorigin=\"anonymous\">";
+		    }
+		}
+	?>
 </head>
 <body>
 	<div class="container-fluid">
@@ -1058,9 +1070,9 @@ function pr($data, $die = false) {
 
 				<div class="row">
 					<div class="col-md-6">
-                  <form method="get" action="<?php echo htmlspecialchars($_SERVER["PHP_SELF"]);?>">  
-                    <input type="submit" name="goto" value="Go to" class="btn btn-primary">  
-                    <input type="text" name="gotoPath" value=<?php echo $gotoPath; ?> class="form-control">
+                  <form method="get" action="<?php echo htmlspecialchars($_SERVER["PHP_SELF"]);?>" class="form-inline">  
+                    <input type="text" name="gotoPath" value=<?php echo $gotoPath; ?> class="form-control" size="80%">
+                    <input type="submit" name="goto" value="Go to" class="btn btn-primary" size="20%">  
                     <?php
                       foreach($_GET as $name => $value) {
                         if ($name!=="gotoPath" && $name!=="goto") {
@@ -1072,9 +1084,9 @@ function pr($data, $die = false) {
                   </form>
             </div>
 					<div class="col-md-6">
-                  <form method="get" action="<?php echo htmlspecialchars($_SERVER["PHP_SELF"]);?>">  
-                    <input type="submit" name="submit" value="Filter files" class="btn btn-primary">  
-                    <input type="text" name="regex" class="form-control" value=<?php echo $regex; ?>>
+                  <form method="get" action="<?php echo htmlspecialchars($_SERVER["PHP_SELF"]);?>" class="form-inline">  
+                    <input type="text" name="regex" class="form-control" value=<?php echo $regex; ?> size="80%">
+                    <input type="submit" name="submit" value="Filter files" class="btn btn-primary" size="20%">  
                     <?php
                       foreach($_GET as $name => $value) {
                         if ($name!=="regex" && $name!=="submit") {
@@ -1085,7 +1097,7 @@ function pr($data, $die = false) {
                     ?>
                   </form>
             </div>
-					<div class="col-xs-12">
+	    <div class="col-md-6">
 		<div>
                   <form class="form-inline" method="post" action="<?php echo htmlspecialchars($_SERVER["PHP_SELF"]);?>">  
                     <input type="hidden" name="base_regex" value=<?php echo $regex;?>>
@@ -1095,8 +1107,27 @@ function pr($data, $die = false) {
                     <input type="submit" name="download_files" value="Download recursively" class="btn btn-primary">  
                     as <input type="text" name="download_name" class="form-control" value=<?php echo end($data['directoryTree']).".tar.gz";?>>
                   </form>
-			</div>
-		</div>
+		    </div>
+	    </div>
+	    <div class="col-md-6">
+		<div>
+                  <form class="form-inline" method="get" action="<?php echo htmlspecialchars($_SERVER["PHP_SELF"]);?>">  
+		    <?php if($darkmode): ?>
+			<input type="submit" name="toggledark", value="Light mode" class="btn btn-secondary">
+		    <?php else: ?>
+			<input type="submit" name="toggledark", value="Dark mode" class="btn btn-secondary">
+		    <?php endif; ?>
+                    <?php
+                      foreach($_GET as $name => $value) {
+                        if ($name!=="toggledark") {
+                          $value = html_entity_decode($value);
+                          echo '<input type="hidden" name="'. $name .'" value="'. $value .'">';
+                        }
+                      }
+                    ?>
+                  </form>
+		    </div>
+	    </div>
 	</div>
 
 
